@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calibrated-active-learning"
+version = "0.1.0"
+description = "Calibrated Active Learning using Empirical Likelihood"
+requires-python = ">=3.7"
+dependencies = [
+    "numpy",
+    "scipy",
+    "xgboost",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+

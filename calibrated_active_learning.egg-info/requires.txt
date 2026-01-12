@@ -1,0 +1,8 @@
+numpy
+scipy
+xgboost
+
+[dev]
+pytest
+black
+flake8
