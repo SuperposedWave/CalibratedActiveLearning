@@ -1,5 +1,4 @@
 import numpy as np
-import random
 from tqdm import tqdm
 
 import torch
@@ -8,63 +7,7 @@ import torch.optim as optim
 
 from sklearn.model_selection import KFold
 from calibrated_active_learning import estimate_p, estimate_pi, sample_by_pi
-
-# ============================================================
-# Repro
-# ============================================================
-
-def seed_everything(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-
-# ============================================================
-# DGP
-# ============================================================
-
-def generate_finite_population(N, dim, n_1, n_2, is_linear=False, seed=0):
-    rng = np.random.default_rng(seed)
-
-    X = rng.normal(size=(N, dim))
-    eps = rng.normal(size=N)
-
-    if is_linear:
-        beta = rng.uniform(-2, 2, size=dim)
-        m = X @ beta
-    else:
-        m = (
-            2.0 * np.sin(X[:, 0])
-            + 1.5 * (X[:, 1] ** 2)
-            + 0.8 * X[:, 2]
-            + 0.5 * X[:, 3] * X[:, 4]
-        )
-
-    Y = m + eps + 100.0
-    mu_X = X.mean(axis=0)
-    mu_Y = Y.mean()
-
-    idx1 = rng.choice(N, size=n_1, replace=False)
-    X_1, Y_1 = X[idx1], Y[idx1]
-
-    # biased S2 depends on X
-    score = 1.5 * X[:, 0] + 0.5 * X[:, 1]
-    prob = 1 / (1 + np.exp(-score))
-    prob = prob / prob.sum()
-    idx2 = rng.choice(N, size=n_2, replace=False, p=prob)
-    X_2, Y_2 = X[idx2], Y[idx2]
-
-    return {
-        "X": X,
-        "Y": Y,
-        "mu_X": mu_X,
-        "mu_Y": mu_Y,
-        "X_1": X_1,
-        "Y_1": Y_1,
-        "X_2": X_2,
-        "Y_2": Y_2,
-    }
+from utils import seed_everything, generate_finite_population, fixed_budget_draw
 
 
 # ============================================================
@@ -217,15 +160,7 @@ def fit_f_and_u_crossfit_mlp(
 # ============================================================
 # Sampling rule pi and draws
 # ============================================================
-
-
-def fixed_budget_draw(weights, m, rng):
-    w = np.maximum(weights, 0.0)
-    w = w / w.sum()
-    idx = rng.choice(len(w), size=m, replace=False, p=w)
-    xi = np.zeros(len(w), dtype=int)
-    xi[idx] = 1
-    return xi
+# Note: fixed_budget_draw is now imported from utils
 
 
 # ============================================================
@@ -365,7 +300,9 @@ def simulate_once(
 ):
     rng = np.random.default_rng(seed)
 
-    data = generate_finite_population(N, dim, n_1, n_2, is_linear=is_linear, seed=seed)
+    data = generate_finite_population(
+        N, dim, n_1, n_2, is_linear=is_linear, seed=seed, return_dict=True
+    )
     X, Y = data["X"], data["Y"]
     X_1, Y_1 = data["X_1"], data["Y_1"]
     X_2, Y_2 = data["X_2"], data["Y_2"]
@@ -400,7 +337,7 @@ def simulate_once(
     # (A) Calibrated Active: pi ∝ p * uhat
     if use_fixed_budget:
         w_cal = p * uhat
-        xi_cal = fixed_budget_draw(w_cal, budget, rng)
+        xi_cal = fixed_budget_draw(w_cal, budget, rng=rng)
         pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
     else:
         pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
@@ -423,7 +360,7 @@ def simulate_once(
     # (B) Raw Active: pi ∝ uhat, uniform weights
     if use_fixed_budget:
         w_raw = uhat
-        xi_raw = fixed_budget_draw(w_raw, budget, rng)
+        xi_raw = fixed_budget_draw(w_raw, budget, rng=rng)
         pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
     else:
         pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
@@ -447,7 +384,7 @@ def simulate_once(
     pi_rand = np.ones(n_2) * (budget / n_2)
     pi_rand = np.clip(pi_rand, 0.01, 0.95)
     if use_fixed_budget:
-        xi_rand = fixed_budget_draw(np.ones(n_2), budget, rng)
+        xi_rand = fixed_budget_draw(np.ones(n_2), budget, rng=rng)
     else:
         xi_rand = sample_by_pi(pi_rand)
 

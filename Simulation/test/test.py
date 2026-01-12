@@ -1,53 +1,19 @@
 import numpy as np
-import random
 from xgboost import XGBRegressor
 from calibrated_active_learning import estimate_p, estimate_pi, sample_by_pi, get_activate_estimator
 from tqdm import tqdm
 from rich.console import Console
-from rich.table import Table
-
-def seed_everything(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-
-def generate_finite_population(N, dim, n_1, n_2, is_linear=True):
-    # generate N points in dim-dimensional space
-    X = np.random.randn(N, dim)
-    noise = np.random.randn(N)
-
-    if is_linear:
-        beta = np.random.uniform(-5, 5, dim)
-        Y = X @ beta + noise + 100
-        mu_X = np.mean(X, axis=0)
-    else:
-        prod = X[:,:,None] * X[:,None,:]
-        prod = prod.reshape(N, dim*dim)
-        # stack prod and X
-        X = np.concatenate([X, prod], axis=1)
-        beta = np.random.uniform(-5, 5, X.shape[1])
-        Y = X @ beta + noise + 100
-        # 在扩展 X 之后计算 mu_X
-        mu_X = np.mean(X, axis=0)
-    
-    mu_Y = np.mean(Y)
-    # sample a small sample S_1 from X by simple random sampling
-    S_1 = np.random.choice(N, size=n_1, replace=False)
-    X_1 = X[S_1]
-    Y_1 = Y[S_1]
-
-    # sample a large sample S_2 from X by a biased sampling design
-    score = 1.5 * X[:, 0] + 0.5 * X[:, 1]  # 只依赖 covariates
-    p = 1 / (1 + np.exp(-score))           # logistic
-    p = p / p.sum()
-    S_2 = np.random.choice(N, size=n_2, replace=False, p=p)
-    X_2 = X[S_2]
-    Y_2 = Y[S_2]
-
-
-    return mu_X, mu_Y, X_1, Y_1, Y_2,X_2
+from utils import (
+    seed_everything,
+    generate_finite_population,
+    summarize_metrics,
+    compute_coverage,
+    create_results_table,
+)
 
 
 def fit_models(X_1, Y_1):
+    """Fit regression and uncertainty models using XGBoost."""
     model_reg = XGBRegressor()
     model_reg.fit(X_1, Y_1)
     Y_1_pred = model_reg.predict(X_1)
@@ -55,13 +21,6 @@ def fit_models(X_1, Y_1):
     model_unc = XGBRegressor()
     model_unc.fit(X_1, res_abs)
     return model_reg, model_unc
-
-
-def summarize_metrics(estimates, truth):
-    bias = np.mean(estimates - truth)
-    variance = np.var(estimates - truth)
-    mse = np.mean((estimates - truth) ** 2)
-    return bias, variance, mse
 
 if __name__ == "__main__":
     # generate data
@@ -76,7 +35,9 @@ if __name__ == "__main__":
     
 
     def simulate_one_time():
-        mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(N, dim, n_1, n_2, is_linear)
+        mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(
+            N, dim, n_1, n_2, is_linear=is_linear, use_quadratic_features=not is_linear
+        )
         model_reg, model_unc = fit_models(X_1, Y_1)
         mu_X_s1 = np.mean(X_1, axis=0)
         # Use estimate_p from package
@@ -193,87 +154,33 @@ if __name__ == "__main__":
     )
     bias_small, variance_small, mse_small = summarize_metrics(lst_small_only, lst_mu_Y)
 
-    z_map = {0.90: 1.644854, 0.95: 1.959964, 0.99: 2.575829}
-    coverage_calibrated = {}
-    coverage_cal_s1 = {}
-    coverage_raw = {}
-    coverage_cal_random = {}
-    coverage_small_only = {}
-    for level, z in z_map.items():
-        coverage_calibrated[level] = np.mean(
-            (lst_mu_Y >= lst_activate_estimator_calibrated - z * np.sqrt(lst_var_calibrated))
-            & (lst_mu_Y <= lst_activate_estimator_calibrated + z * np.sqrt(lst_var_calibrated))
-        )
-        coverage_cal_s1[level] = np.mean(
-            (lst_mu_Y >= lst_activate_estimator_calibrated_s1 - z * np.sqrt(lst_var_calibrated_s1))
-            & (lst_mu_Y <= lst_activate_estimator_calibrated_s1 + z * np.sqrt(lst_var_calibrated_s1))
-        )
-        coverage_raw[level] = np.mean(
-            (lst_mu_Y >= lst_activate_estimator_raw - z * np.sqrt(lst_var_raw))
-            & (lst_mu_Y <= lst_activate_estimator_raw + z * np.sqrt(lst_var_raw))
-        )
-        coverage_cal_random[level] = np.mean(
-            (lst_mu_Y >= lst_activate_estimator_cal_random - z * np.sqrt(lst_var_cal_random))
-            & (lst_mu_Y <= lst_activate_estimator_cal_random + z * np.sqrt(lst_var_cal_random))
-        )
-        coverage_small_only[level] = np.mean(
-            (lst_mu_Y >= lst_small_only - z * np.sqrt(lst_var_small_only))
-            & (lst_mu_Y <= lst_small_only + z * np.sqrt(lst_var_small_only))
-        )
+    # Compute coverage rates
+    coverage_calibrated = compute_coverage(
+        lst_activate_estimator_calibrated, lst_mu_Y, lst_var_calibrated
+    )
+    coverage_cal_s1 = compute_coverage(
+        lst_activate_estimator_calibrated_s1, lst_mu_Y, lst_var_calibrated_s1
+    )
+    coverage_raw = compute_coverage(lst_activate_estimator_raw, lst_mu_Y, lst_var_raw)
+    coverage_cal_random = compute_coverage(
+        lst_activate_estimator_cal_random, lst_mu_Y, lst_var_cal_random
+    )
+    coverage_small_only = compute_coverage(lst_small_only, lst_mu_Y, lst_var_small_only)
 
-    table = Table(title="Active Estimator Comparison")
-    table.add_column("Method", style="bold")
-    table.add_column("Bias", justify="right")
-    table.add_column("Variance", justify="right")
-    table.add_column("MSE", justify="right")
-    table.add_column("Coverage(90%)", justify="right")
-    table.add_column("Coverage(95%)", justify="right")
-    table.add_column("Coverage(99%)", justify="right")
-    table.add_row(
+    # Create and display results table
+    methods = [
         "Calibrated Active (mu_X true)",
-        f"{bias_calibrated:.6f}",
-        f"{variance_calibrated:.6f}",
-        f"{mse_calibrated:.6f}",
-        f"{coverage_calibrated[0.90]:.3f}",
-        f"{coverage_calibrated[0.95]:.3f}",
-        f"{coverage_calibrated[0.99]:.3f}",
-    )
-    table.add_row(
         "Calibrated Active (mu_X S1)",
-        f"{bias_cal_s1:.6f}",
-        f"{variance_cal_s1:.6f}",
-        f"{mse_cal_s1:.6f}",
-        f"{coverage_cal_s1[0.90]:.3f}",
-        f"{coverage_cal_s1[0.95]:.3f}",
-        f"{coverage_cal_s1[0.99]:.3f}",
-    )
-    table.add_row(
         "Raw Active",
-        f"{bias_raw:.6f}",
-        f"{variance_raw:.6f}",
-        f"{mse_raw:.6f}",
-        f"{coverage_raw[0.90]:.3f}",
-        f"{coverage_raw[0.95]:.3f}",
-        f"{coverage_raw[0.99]:.3f}",
-    )
-    table.add_row(
         "Calibrated Random",
-        f"{bias_cal_random:.6f}",
-        f"{variance_cal_random:.6f}",
-        f"{mse_cal_random:.6f}",
-        f"{coverage_cal_random[0.90]:.3f}",
-        f"{coverage_cal_random[0.95]:.3f}",
-        f"{coverage_cal_random[0.99]:.3f}",
-    )
-    table.add_row(
         "Small-only (S1 mean)",
-        f"{bias_small:.6f}",
-        f"{variance_small:.6f}",
-        f"{mse_small:.6f}",
-        f"{coverage_small_only[0.90]:.3f}",
-        f"{coverage_small_only[0.95]:.3f}",
-        f"{coverage_small_only[0.99]:.3f}",
-    )
+    ]
+    biases = [bias_calibrated, bias_cal_s1, bias_raw, bias_cal_random, bias_small]
+    variances = [variance_calibrated, variance_cal_s1, variance_raw, variance_cal_random, variance_small]
+    mses = [mse_calibrated, mse_cal_s1, mse_raw, mse_cal_random, mse_small]
+    coverages = [coverage_calibrated, coverage_cal_s1, coverage_raw, coverage_cal_random, coverage_small_only]
+
+    table = create_results_table(methods, biases, variances, mses, coverages)
     console = Console()
     console.print(table)
 
