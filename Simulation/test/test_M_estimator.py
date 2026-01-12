@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from sklearn.model_selection import KFold
-from Code import el_newton_lambda, el_weights
+from calibrated_active_learning import estimate_p, estimate_pi, sample_by_pi
 
 # ============================================================
 # Repro
@@ -218,25 +218,6 @@ def fit_f_and_u_crossfit_mlp(
 # Sampling rule pi and draws
 # ============================================================
 
-def build_pi_from_weights(w, budget, clip_min=0.01, clip_max=0.95, eps=1e-12):
-    w = np.maximum(w, 0.0) + eps
-    pi = w / w.sum() * budget
-    pi = np.clip(pi, clip_min, clip_max)
-
-    # one rescale step to match expected budget (optional)
-    s = pi.sum()
-    if s != budget:
-        mask = (pi > clip_min + 1e-12) & (pi < clip_max - 1e-12)
-        if mask.any():
-            target = budget - pi[~mask].sum()
-            factor = target / max(pi[mask].sum(), eps)
-            pi[mask] = np.clip(pi[mask] * factor, clip_min, clip_max)
-    return pi
-
-
-def poisson_draw(pi, rng):
-    return rng.binomial(1, pi)
-
 
 def fixed_budget_draw(weights, m, rng):
     w = np.maximum(weights, 0.0)
@@ -413,18 +394,17 @@ def simulate_once(
     )
 
     # Step 2: EL calibration weights p on S2
-    lam, info = el_newton_lambda(X_2, mu_X)
-    p = el_weights(X_2, mu_X, lam)
+    p = estimate_p(X_2, mu_X)
     p0 = np.ones_like(p) / len(p)
 
     # (A) Calibrated Active: pi ∝ p * uhat
-    w_cal = p * uhat
     if use_fixed_budget:
+        w_cal = p * uhat
         xi_cal = fixed_budget_draw(w_cal, budget, rng)
-        pi_cal = build_pi_from_weights(w_cal, budget)
+        pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
     else:
-        pi_cal = build_pi_from_weights(w_cal, budget)
-        xi_cal = poisson_draw(pi_cal, rng)
+        pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
+        xi_cal = sample_by_pi(pi_cal)
 
     model_cal_active = train_active_m_estimator(
         X_2,
@@ -441,13 +421,13 @@ def simulate_once(
     )
 
     # (B) Raw Active: pi ∝ uhat, uniform weights
-    w_raw = uhat
     if use_fixed_budget:
+        w_raw = uhat
         xi_raw = fixed_budget_draw(w_raw, budget, rng)
-        pi_raw = build_pi_from_weights(w_raw, budget)
+        pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
     else:
-        pi_raw = build_pi_from_weights(w_raw, budget)
-        xi_raw = poisson_draw(pi_raw, rng)
+        pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
+        xi_raw = sample_by_pi(pi_raw)
 
     model_raw_active = train_active_m_estimator(
         X_2,
@@ -469,7 +449,7 @@ def simulate_once(
     if use_fixed_budget:
         xi_rand = fixed_budget_draw(np.ones(n_2), budget, rng)
     else:
-        xi_rand = poisson_draw(pi_rand, rng)
+        xi_rand = sample_by_pi(pi_rand)
 
     model_cal_random = train_active_m_estimator(
         X_2,
@@ -507,7 +487,6 @@ def simulate_once(
         "mse_raw_active": mse_raw_active,
         "mse_cal_random": mse_cal_random,
         "mse_small_only": mse_small_only,
-        "el_info": info,
     }
 
 

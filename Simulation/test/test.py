@@ -1,9 +1,7 @@
 import numpy as np
-import json
 import random
 from xgboost import XGBRegressor
-from scipy.optimize import minimize
-from Code import el_newton_lambda, el_weights
+from calibrated_active_learning import estimate_p, estimate_pi, sample_by_pi, get_activate_estimator
 from tqdm import tqdm
 from rich.console import Console
 from rich.table import Table
@@ -59,22 +57,11 @@ def fit_models(X_1, Y_1):
     return model_reg, model_unc
 
 
-
-def get_activate_estimator(y_pred, y_true, pi, xi):
-    return np.mean(y_pred + xi/pi*(y_true - y_pred))
-
-def get_calibrated_activate_estimator(y_pred, y_true, p, pi, xi):
-    return np.sum(p * (y_pred + xi/pi*(y_true - y_pred)))
-
 def summarize_metrics(estimates, truth):
     bias = np.mean(estimates - truth)
     variance = np.var(estimates - truth)
     mse = np.mean((estimates - truth) ** 2)
     return bias, variance, mse
-
-def variance_estimator(p, pi, xi, y_true, y_pred):
-    resid = y_true - y_pred
-    return np.sum((p ** 2) * ((1 - pi) * xi / (pi ** 2)) * (resid ** 2))
 
 if __name__ == "__main__":
     # generate data
@@ -92,47 +79,43 @@ if __name__ == "__main__":
         mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(N, dim, n_1, n_2, is_linear)
         model_reg, model_unc = fit_models(X_1, Y_1)
         mu_X_s1 = np.mean(X_1, axis=0)
-        lam, info = el_newton_lambda(X_2, mu_X)
-        p = el_weights(X_2, mu_X, lam)
-        lam_s1, info_s1 = el_newton_lambda(X_2, mu_X_s1)
-        p_s1 = el_weights(X_2, mu_X_s1, lam_s1)
+        # Use estimate_p from package
+        p = estimate_p(X_2, mu_X)
+        p_s1 = estimate_p(X_2, mu_X_s1)
         y_pred = model_reg.predict(X_2)
         # uncertainty = model_unc.predict(X_2)
         uncertainty = np.maximum(model_unc.predict(X_2), 0.0) + 1e-12
 
-        pi_calibrated = p * uncertainty 
-        pi_calibrated = pi_calibrated / pi_calibrated.sum() * sample_budget
-        pi_calibrated = np.clip(pi_calibrated, 1e-12, 1 - 1e-12)
-        xi_calibrated = np.random.binomial(1, pi_calibrated)
+        # Use estimate_pi and sample_by_pi from package
+        pi_calibrated = estimate_pi(uncertainty, sample_budget, p)
+        xi_calibrated = sample_by_pi(pi_calibrated)
 
-        activate_estimator = get_calibrated_activate_estimator(y_pred, Y_2, p, pi_calibrated, xi_calibrated)
-        var_calibrated = variance_estimator(p, pi_calibrated, xi_calibrated, Y_2, y_pred)
+        activate_estimator, var_calibrated = get_activate_estimator(
+            y_pred, Y_2, pi_calibrated, xi_calibrated, p=p, estimate_variance=True
+        )
 
-        pi_raw = uncertainty / uncertainty.sum() * sample_budget
-        pi_raw = np.clip(pi_raw, 1e-12, 1 - 1e-12)
-        xi_raw = np.random.binomial(1, pi_raw)
-        activate_estimator_raw = get_activate_estimator(y_pred, Y_2, pi_raw, xi_raw)
+        # Raw active: pi based on uncertainty only, uniform weights
+        pi_raw = estimate_pi(uncertainty, sample_budget, p=None)
+        xi_raw = sample_by_pi(pi_raw)
         p_raw = np.ones(n_2) / n_2
-        var_raw = variance_estimator(p_raw, pi_raw, xi_raw, Y_2, y_pred)
-
-        pi_calibrated_s1 = p_s1 * uncertainty
-        pi_calibrated_s1 = pi_calibrated_s1 / pi_calibrated_s1.sum() * sample_budget
-        pi_calibrated_s1 = np.clip(pi_calibrated_s1, 1e-12, 1 - 1e-12)
-        xi_calibrated_s1 = np.random.binomial(1, pi_calibrated_s1)
-        activate_estimator_s1 = get_calibrated_activate_estimator(
-            y_pred, Y_2, p_s1, pi_calibrated_s1, xi_calibrated_s1
-        )
-        var_calibrated_s1 = variance_estimator(
-            p_s1, pi_calibrated_s1, xi_calibrated_s1, Y_2, y_pred
+        activate_estimator_raw, var_raw = get_activate_estimator(
+            y_pred, Y_2, pi_raw, xi_raw, p=p_raw, estimate_variance=True
         )
 
+        # Calibrated active with S1 mu_X
+        pi_calibrated_s1 = estimate_pi(uncertainty, sample_budget, p_s1)
+        xi_calibrated_s1 = sample_by_pi(pi_calibrated_s1)
+        activate_estimator_s1, var_calibrated_s1 = get_activate_estimator(
+            y_pred, Y_2, pi_calibrated_s1, xi_calibrated_s1, p=p_s1, estimate_variance=True
+        )
+
+        # Calibrated random
         pi_rand = np.ones(n_2) * (sample_budget / n_2)
         pi_rand = np.clip(pi_rand, 1e-12, 1 - 1e-12)
-        xi_rand = np.random.binomial(1, pi_rand)
-        activate_estimator_cal_random = get_calibrated_activate_estimator(
-            y_pred, Y_2, p, pi_rand, xi_rand
+        xi_rand = sample_by_pi(pi_rand)
+        activate_estimator_cal_random, var_cal_random = get_activate_estimator(
+            y_pred, Y_2, pi_rand, xi_rand, p=p, estimate_variance=True
         )
-        var_cal_random = variance_estimator(p, pi_rand, xi_rand, Y_2, y_pred)
         small_only = np.mean(Y_1)
         var_small_only = np.var(Y_1, ddof=1) / n_1
         return (
