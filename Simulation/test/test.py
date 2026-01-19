@@ -12,33 +12,37 @@ from utils import (
 )
 
 
-def fit_models(X_1, Y_1):
+def fit_models(X_1, Y_1, random_state=None):
     """Fit regression and uncertainty models using XGBoost."""
-    model_reg = XGBRegressor()
+    model_reg = XGBRegressor(booster='gbtree', tree_method='hist', n_jobs=128, random_state=random_state)
     model_reg.fit(X_1, Y_1)
     Y_1_pred = model_reg.predict(X_1)
     res_abs = np.abs(Y_1 - Y_1_pred)
-    model_unc = XGBRegressor()
+    model_unc = XGBRegressor(booster='gbtree', tree_method='hist', n_jobs=128, random_state=random_state)
     model_unc.fit(X_1, res_abs)
     return model_reg, model_unc
 
 if __name__ == "__main__":
+    # Set random seed for reproducibility
+    seed = 42
+    seed_everything(seed)
+    
     # generate data
-    N = 10000
+    N = 1000
     dim = 10
-    n_1 = 500
-    n_2 =  5000
-    sample_budget = 1000
-    n_sim = 100
+    n_1 = 100
+    n_2 =  500
+    sample_budget = 200
+    n_sim = 1000
     is_linear = False
     use_mu_x_from_s1 = False
     
 
-    def simulate_one_time():
+    def simulate_one_time(sim_seed=None):
         mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(
-            N, dim, n_1, n_2, is_linear=is_linear, use_quadratic_features=not is_linear
+            N, dim, n_1, n_2, is_linear=is_linear, use_quadratic_features=not is_linear, seed=sim_seed
         )
-        model_reg, model_unc = fit_models(X_1, Y_1)
+        model_reg, model_unc = fit_models(X_1, Y_1, random_state=sim_seed)
         mu_X_s1 = np.mean(X_1, axis=0)
         # Use estimate_p from package
         p = estimate_p(X_2, mu_X)
@@ -106,6 +110,8 @@ if __name__ == "__main__":
     lst_var_calibrated_s1 = []
     lst_var_small_only = []
     for i in tqdm(range(n_sim)):
+        # Use different seed for each simulation to ensure reproducibility while allowing variation
+        sim_seed = seed + i if seed is not None else None
         (
             mu_Y,
             activate_estimator,
@@ -118,7 +124,7 @@ if __name__ == "__main__":
             var_cal_random,
             var_calibrated_s1,
             var_small_only,
-        ) = simulate_one_time()
+        ) = simulate_one_time(sim_seed=sim_seed)
         lst_mu_Y.append(mu_Y)
         lst_activate_estimator_calibrated.append(activate_estimator)
         lst_activate_estimator_raw.append(activate_estimator_raw)

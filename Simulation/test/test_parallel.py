@@ -107,7 +107,7 @@ if __name__ == "__main__":
     is_linear = False
     use_mu_x_from_s1 = False
     base_seed = 123
-    max_workers = None
+    max_workers = 128
 
     # print("mu_Y_raw =", np.mean(Y_2))
     lst_mu_Y = []

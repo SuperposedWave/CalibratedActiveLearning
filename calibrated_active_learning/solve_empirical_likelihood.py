@@ -75,7 +75,25 @@ def el_newton_lambda(
         # But J = -A, so step = (-A)^{-1} g = -A^{-1} g
         # Hence lam_new = lam - (-A^{-1} g) = lam + A^{-1} g
         # Solve (A + ridge I) step = g
-        step = np.linalg.solve(A + ridge * np.eye(d), g)
+        # Use robust solver to handle near-singular matrices
+        A_reg = A + ridge * np.eye(d)
+        try:
+            step = np.linalg.solve(A_reg, g)
+        except np.linalg.LinAlgError:
+            # If matrix is singular, use least squares or increase ridge
+            # Try with larger ridge first
+            ridge_adaptive = ridge
+            for _ in range(10):
+                ridge_adaptive *= 10
+                A_reg = A + ridge_adaptive * np.eye(d)
+                try:
+                    step = np.linalg.solve(A_reg, g)
+                    break
+                except np.linalg.LinAlgError:
+                    continue
+            else:
+                # If still singular, use least squares
+                step, _, _, _ = np.linalg.lstsq(A_reg, g, rcond=None)
 
         # Damped update with feasibility + (optional) decrease in ||g||
         t = 1.0

@@ -131,6 +131,93 @@ def generate_finite_population(
         return mu_X, mu_Y, X_1, Y_1, Y_2, X_2
 
 
+# def generate_finite_population(
+#     N: int,
+#     dim: int,
+#     n_1: int,
+#     n_2: int,
+#     is_linear: bool = True,
+#     seed: Optional[int] = None,
+#     return_dict: bool = False,
+#     use_quadratic_features: bool = True
+# ):
+#     """
+#     DGP tailored for calibrated active learning:
+#     - Strong covariate shift between population and S2
+#     - Selection bias aligned with outcome-relevant directions
+#     - Heteroskedastic noise to make uncertainty informative
+#     """
+
+#     if seed is not None:
+#         rng = np.random.default_rng(seed)
+#     else:
+#         rng = np.random.default_rng()
+
+#     # -----------------------------
+#     # Population covariates
+#     # -----------------------------
+#     X = rng.normal(size=(N, dim))
+
+#     # -----------------------------
+#     # Outcome model: nonlinear + interaction
+#     # -----------------------------
+#     m = (
+#         2.0 * np.sin(X[:, 0])
+#         + 1.5 * (X[:, 1] ** 2)
+#         + 1.0 * X[:, 2]
+#         + 0.8 * X[:, 0] * X[:, 1]
+#     )
+
+#     # -----------------------------
+#     # Heteroskedastic noise (key!)
+#     # Noise scale depends on X0, X1
+#     # -----------------------------
+#     sigma = 0.5 + 2.0 * (np.abs(X[:, 0]) > 1.0) + 1.0 * (X[:, 1] > 0)
+#     eps = rng.normal(scale=sigma, size=N)
+
+#     Y = m + eps + 100.0
+
+#     mu_X = X.mean(axis=0)
+#     mu_Y = Y.mean()
+
+#     # -----------------------------
+#     # Sample S1: small, unbiased
+#     # -----------------------------
+#     idx1 = rng.choice(N, size=n_1, replace=False)
+#     X_1, Y_1 = X[idx1], Y[idx1]
+
+#     # -----------------------------
+#     # Sample S2: strongly biased selection
+#     # Selection aligns with outcome-relevant directions
+#     # -----------------------------
+#     score = (
+#         3.0 * X[:, 0]
+#         + 2.0 * X[:, 1]
+#         + 1.5 * (X[:, 0] * X[:, 1])
+#         + 0.5 * (X[:, 2] ** 2)
+#     )
+
+#     prob = 1 / (1 + np.exp(-score))
+#     prob = prob / prob.sum()
+
+#     idx2 = rng.choice(N, size=n_2, replace=False, p=prob)
+#     X_2, Y_2 = X[idx2], Y[idx2]
+
+#     if return_dict:
+#         return {
+#             "X": X,
+#             "Y": Y,
+#             "mu_X": mu_X,
+#             "mu_Y": mu_Y,
+#             "X_1": X_1,
+#             "Y_1": Y_1,
+#             "X_2": X_2,
+#             "Y_2": Y_2,
+#         }
+#     else:
+#         return mu_X, mu_Y, X_1, Y_1, Y_2, X_2
+
+
 def summarize_metrics(estimates: np.ndarray, truth: np.ndarray) -> Tuple[float, float, float]:
     """
     Compute bias, variance, and MSE of estimates.

@@ -29,4 +29,5 @@ def get_activate_estimator(y_pred, y_true, pi, xi, p=None, estimate_variance=Fal
         return est
     resid = y_true - y_pred
     var = np.sum(p ** 2 * ((1 - pi) * xi / (pi ** 2)) * (resid ** 2))
+    # var = np.sum((p**2) * ((1.0 - pi) / pi) * (resid**2))
     return est, var
