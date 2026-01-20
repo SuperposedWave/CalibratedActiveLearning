@@ -330,6 +330,7 @@ def simulate_once(
         seed=seed,
     )
 
+    tau_mix = 0.1
     # Step 2: EL calibration weights p on S2
     p = estimate_p(X_2, mu_X)
     p0 = np.ones_like(p) / len(p)
@@ -338,9 +339,9 @@ def simulate_once(
     if use_fixed_budget:
         w_cal = p * uhat
         xi_cal = fixed_budget_draw(w_cal, budget, rng=rng)
-        pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
+        pi_cal = estimate_pi(uhat, budget, p, tau=tau_mix)
     else:
-        pi_cal = estimate_pi(uhat, budget, p, clip_min=0.01, clip_max=0.95)
+        pi_cal = estimate_pi(uhat, budget, p, tau=tau_mix)
         xi_cal = sample_by_pi(pi_cal)
 
     model_cal_active = train_active_m_estimator(
@@ -361,9 +362,9 @@ def simulate_once(
     if use_fixed_budget:
         w_raw = uhat
         xi_raw = fixed_budget_draw(w_raw, budget, rng=rng)
-        pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
+        pi_raw = estimate_pi(uhat, budget, p=None, tau=tau_mix)
     else:
-        pi_raw = estimate_pi(uhat, budget, p=None, clip_min=0.01, clip_max=0.95)
+        pi_raw = estimate_pi(uhat, budget, p=None, tau=tau_mix)
         xi_raw = sample_by_pi(pi_raw)
 
     model_raw_active = train_active_m_estimator(
@@ -382,7 +383,6 @@ def simulate_once(
 
     # (C) Calibrated Random: pi constant = budget/n2
     pi_rand = np.ones(n_2) * (budget / n_2)
-    pi_rand = np.clip(pi_rand, 0.01, 0.95)
     if use_fixed_budget:
         xi_rand = fixed_budget_draw(np.ones(n_2), budget, rng=rng)
     else:
@@ -435,10 +435,10 @@ if __name__ == "__main__":
     seed_everything(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    N, dim = 10000, 10
-    n_1, n_2 = 100, 1000
-    budget = 500
-    n_sim = 200
+    N, dim = 1000, 5
+    n_1, n_2 = 50, 500
+    budget = 200
+    n_sim = 100
     is_linear = False
     use_fixed_budget = False  # Poisson is theory-clean for xi/pi
 

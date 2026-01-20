@@ -70,32 +70,29 @@ def generate_finite_population(
         else:
             beta = np.random.uniform(-5, 5, size=dim)
         noise = rng.normal(size=N) if seed is not None else np.random.randn(N)
-        Y = X @ beta + noise + 100
+        Y = X @ beta + noise
         mu_X = np.mean(X, axis=0)
     else:
+        # Custom nonlinear DGP:
+        # Y = 10 * sin(pi * X1 * X2) + 20 * (X3 - 0.5)^2 + 10 * X4 + 5 * X5 + eps
+        if X.shape[1] < 5:
+            raise ValueError("dim must be >= 5 for the custom nonlinear DGP.")
+        # Heteroskedastic noise tied to X1/X2 to make uncertainty more learnable.
+        sigma = 0.5 + 1.0 * np.abs(X[:, 0]) + 0.8 * (X[:, 1] ** 2)
+        eps = rng.normal(scale=sigma, size=N) if seed is not None else np.random.randn(N) * sigma
+        m = (
+            10.0 * np.sin(np.pi * X[:, 0] * X[:, 1])
+            + 20.0 * (X[:, 2] - 0.5) ** 2
+            + 10.0 * X[:, 3]
+            + 5.0 * X[:, 4]
+        )
+        Y = m + eps
         if use_quadratic_features:
-            # test.py style: quadratic features
-            prod = X[:, :, None] * X[:, None, :]
+            X_base = X
+            prod = X_base[:, :, None] * X_base[:, None, :]
             prod = prod.reshape(N, dim * dim)
-            X = np.concatenate([X, prod], axis=1)
-            if seed is not None:
-                beta = rng.uniform(-5, 5, size=X.shape[1])
-            else:
-                beta = np.random.uniform(-5, 5, size=X.shape[1])
-            noise = rng.normal(size=N) if seed is not None else np.random.randn(N)
-            Y = X @ beta + noise + 100
-            mu_X = np.mean(X, axis=0)
-        else:
-            # test_M_estimator.py style: nonlinear function
-            eps = rng.normal(size=N) if seed is not None else np.random.randn(N)
-            m = (
-                2.0 * np.sin(X[:, 0])
-                + 1.5 * (X[:, 1] ** 2)
-                + 0.8 * X[:, 2]
-                + 0.5 * X[:, 3] * X[:, 4]
-            )
-            Y = m + eps + 100.0
-            mu_X = X.mean(axis=0)
+            X = np.concatenate([X_base, prod], axis=1)
+        mu_X = np.mean(X, axis=0)
     
     mu_Y = np.mean(Y)
     
@@ -107,7 +104,8 @@ def generate_finite_population(
     X_1, Y_1 = X[idx1], Y[idx1]
     
     # Sample S2: biased sampling based on X
-    score = 1.5 * X[:, 0] + 0.5 * X[:, 1]
+    score = 1.5 * X[:, 3] + 0.5 * X[:, 4]
+    score = Y
     prob = 1 / (1 + np.exp(-score))
     prob = prob / prob.sum()
     if seed is not None:
@@ -175,7 +173,7 @@ def generate_finite_population(
 #     sigma = 0.5 + 2.0 * (np.abs(X[:, 0]) > 1.0) + 1.0 * (X[:, 1] > 0)
 #     eps = rng.normal(scale=sigma, size=N)
 
-#     Y = m + eps + 100.0
+#     Y = m + eps
 
 #     mu_X = X.mean(axis=0)
 #     mu_Y = Y.mean()
@@ -331,4 +329,3 @@ def fixed_budget_draw(weights: np.ndarray, m: int, rng: Optional[np.random.Gener
     xi = np.zeros(len(w), dtype=int)
     xi[idx] = 1
     return xi
-

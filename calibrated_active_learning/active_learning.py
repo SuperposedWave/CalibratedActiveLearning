@@ -10,12 +10,19 @@ def estimate_p(X_2, mu_X, verbose=False):
         print("moment check (should be close to mu_x):", (p[:, None] * X_2).sum(axis=0)[:5])
     return p
 
-def estimate_pi(uncertainty, sample_budget, p, clip_min=1e-12, clip_max=1-1e-12):
+def estimate_pi(uncertainty, sample_budget, p, tau=0.0):
     if p is None:
         p = np.ones(len(uncertainty)) / len(uncertainty)
     pi = p * uncertainty
-    pi = pi / pi.sum() * sample_budget
-    pi = np.clip(pi, clip_min, clip_max)
+    total = np.sum(pi)
+    if not np.isfinite(total) or total <= 0.0:
+        return np.ones(len(uncertainty)) * (sample_budget / len(uncertainty))
+    pi = pi / total * sample_budget
+    if tau > 0.0:
+        pi_unif = np.ones(len(uncertainty)) * (sample_budget / len(uncertainty))
+        pi = (1.0 - tau) * pi + tau * pi_unif
+    # Clip after mixing to keep probabilities valid.
+    pi = np.clip(pi, 0.0, 1.0)
     return pi
 
 def sample_by_pi(pi):

@@ -13,14 +13,61 @@ from utils import (
 )
 
 
-def fit_models(X_1, Y_1):
-    """Fit regression and uncertainty models using XGBoost."""
-    model_reg = XGBRegressor(n_jobs=1)
+def fit_models(X_1, Y_1, random_state=None, n_splits=5):
+    """Fit regression and uncertainty models using cross-fitted residuals."""
+    model_reg = XGBRegressor(
+        n_jobs=1,
+        random_state=random_state,
+        n_estimators=200,
+        max_depth=4,
+        min_child_weight=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+    )
+    model_unc = XGBRegressor(
+        n_jobs=1,
+        random_state=random_state,
+        n_estimators=200,
+        max_depth=4,
+        min_child_weight=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+    )
+
+    n = X_1.shape[0]
+    splits = max(2, min(n_splits, n))
+    if n < 2:
+        model_reg.fit(X_1, Y_1)
+        res_abs = np.abs(Y_1 - model_reg.predict(X_1))
+        model_unc.fit(X_1, res_abs)
+        return model_reg, model_unc
+
+    rng = np.random.default_rng(random_state)
+    perm = rng.permutation(n)
+    fold_sizes = np.full(splits, n // splits, dtype=int)
+    fold_sizes[: n % splits] += 1
+    oof_resid = np.empty(n, dtype=float)
+    start = 0
+    for fold_size in fold_sizes:
+        stop = start + fold_size
+        val_idx = perm[start:stop]
+        train_idx = np.concatenate([perm[:start], perm[stop:]])
+        fold_reg = XGBRegressor(
+            n_jobs=1,
+            random_state=random_state,
+            n_estimators=200,
+            max_depth=4,
+            min_child_weight=5,
+            subsample=0.8,
+            colsample_bytree=0.8,
+        )
+        fold_reg.fit(X_1[train_idx], Y_1[train_idx])
+        y_val_pred = fold_reg.predict(X_1[val_idx])
+        oof_resid[val_idx] = np.abs(Y_1[val_idx] - y_val_pred)
+        start = stop
+
     model_reg.fit(X_1, Y_1)
-    Y_1_pred = model_reg.predict(X_1)
-    res_abs = np.abs(Y_1 - Y_1_pred)
-    model_unc = XGBRegressor(n_jobs=1)
-    model_unc.fit(X_1, res_abs)
+    model_unc.fit(X_1, oof_resid)
     return model_reg, model_unc
 
 
@@ -34,13 +81,14 @@ def simulate_one_time(
     is_linear,
     use_mu_x_from_s1,
     base_seed,
+    tau_mix,
 ):
     if base_seed is not None:
         seed_everything(base_seed + sim_idx)
     mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(
         N, dim, n_1, n_2, is_linear=is_linear, use_quadratic_features=not is_linear
     )
-    model_reg, model_unc = fit_models(X_1, Y_1)
+    model_reg, model_unc = fit_models(X_1, Y_1, random_state=base_seed + sim_idx)
     mu_X_s1 = np.mean(X_1, axis=0)
     # Use estimate_p from package
     p = estimate_p(X_2, mu_X)
@@ -50,7 +98,7 @@ def simulate_one_time(
     uncertainty = np.maximum(model_unc.predict(X_2), 0.0) + 1e-12
 
     # Use estimate_pi and sample_by_pi from package
-    pi_calibrated = estimate_pi(uncertainty, sample_budget, p)
+    pi_calibrated = estimate_pi(uncertainty, sample_budget, p, tau=tau_mix)
     xi_calibrated = sample_by_pi(pi_calibrated)
 
     activate_estimator, var_calibrated = get_activate_estimator(
@@ -58,7 +106,7 @@ def simulate_one_time(
     )
 
     # Raw active: pi based on uncertainty only, uniform weights
-    pi_raw = estimate_pi(uncertainty, sample_budget, p=None)
+    pi_raw = estimate_pi(uncertainty, sample_budget, p=None, tau=tau_mix)
     xi_raw = sample_by_pi(pi_raw)
     p_raw = np.ones(n_2) / n_2
     activate_estimator_raw, var_raw = get_activate_estimator(
@@ -66,7 +114,7 @@ def simulate_one_time(
     )
 
     # Calibrated active with S1 mu_X
-    pi_calibrated_s1 = estimate_pi(uncertainty, sample_budget, p_s1)
+    pi_calibrated_s1 = estimate_pi(uncertainty, sample_budget, p_s1, tau=tau_mix)
     xi_calibrated_s1 = sample_by_pi(pi_calibrated_s1)
     activate_estimator_s1, var_calibrated_s1 = get_activate_estimator(
         y_pred, Y_2, pi_calibrated_s1, xi_calibrated_s1, p=p_s1, estimate_variance=True
@@ -74,7 +122,6 @@ def simulate_one_time(
 
     # Calibrated random
     pi_rand = np.ones(n_2) * (sample_budget / n_2)
-    pi_rand = np.clip(pi_rand, 1e-12, 1 - 1e-12)
     xi_rand = sample_by_pi(pi_rand)
     activate_estimator_cal_random, var_cal_random = get_activate_estimator(
         y_pred, Y_2, pi_rand, xi_rand, p=p, estimate_variance=True
@@ -108,6 +155,7 @@ if __name__ == "__main__":
     use_mu_x_from_s1 = False
     base_seed = 123
     max_workers = 128
+    tau_mix = 0.1
 
     # print("mu_Y_raw =", np.mean(Y_2))
     lst_mu_Y = []
@@ -135,6 +183,7 @@ if __name__ == "__main__":
                 is_linear,
                 use_mu_x_from_s1,
                 base_seed,
+                tau_mix,
             )
             for i in range(n_sim)
         ]
