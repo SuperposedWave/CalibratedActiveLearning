@@ -151,7 +151,7 @@ if __name__ == "__main__":
     n_2 = 5000
     sample_budget = 1000
     n_sim = 100
-    is_linear = False
+    is_linear = True
     use_mu_x_from_s1 = False
     base_seed = 123
     max_workers = 128

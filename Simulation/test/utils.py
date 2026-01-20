@@ -73,12 +73,11 @@ def generate_finite_population(
         Y = X @ beta + noise
         mu_X = np.mean(X, axis=0)
     else:
-        # Custom nonlinear DGP:
-        # Y = 10 * sin(pi * X1 * X2) + 20 * (X3 - 0.5)^2 + 10 * X4 + 5 * X5 + eps
+        # Custom nonlinear DGP.
         if X.shape[1] < 5:
             raise ValueError("dim must be >= 5 for the custom nonlinear DGP.")
-        # Heteroskedastic noise tied to X1/X2 to make uncertainty more learnable.
-        sigma = 0.5 + 1.0 * np.abs(X[:, 0]) + 0.8 * (X[:, 1] ** 2)
+        # Homoskedastic noise.
+        sigma = 1.0
         eps = rng.normal(scale=sigma, size=N) if seed is not None else np.random.randn(N) * sigma
         m = (
             10.0 * np.sin(np.pi * X[:, 0] * X[:, 1])
@@ -104,8 +103,8 @@ def generate_finite_population(
     X_1, Y_1 = X[idx1], Y[idx1]
     
     # Sample S2: biased sampling based on X
-    score = 1.5 * X[:, 3] + 0.5 * X[:, 4]
-    score = Y
+    score = 1.5 * X[:, 0] + 0.5 * X[:, 1]
+    # score = Y
     prob = 1 / (1 + np.exp(-score))
     prob = prob / prob.sum()
     if seed is not None:

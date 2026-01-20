@@ -87,7 +87,7 @@ if __name__ == "__main__":
     n_2 =  500
     sample_budget = 200
     n_sim = 100
-    is_linear = False
+    is_linear = True
     use_mu_x_from_s1 = False
     tau_mix = 0.5
     
@@ -101,6 +101,12 @@ if __name__ == "__main__":
         # Use estimate_p from package
         p = estimate_p(X_2, mu_X)
         p_s1 = estimate_p(X_2, mu_X_s1)
+        mu_x_s1_diff = mu_X_s1 - mu_X
+        mu_x_s1_diff_norm = np.linalg.norm(mu_x_s1_diff)
+        moment_error = (p[:, None] * X_2).sum(axis=0) - mu_X
+        moment_error_norm = np.linalg.norm(moment_error)
+        p_max = np.max(p)
+        p_min = np.min(p)
         y_pred = model_reg.predict(X_2)
         uncertainty = np.maximum(model_unc.predict(X_2), 1e-12)
 
@@ -112,7 +118,7 @@ if __name__ == "__main__":
             y_pred, Y_2, pi_calibrated, xi_calibrated, p=p, estimate_variance=True
         )
 
-        # Raw active: pi based on uncertainty only, uniform weights
+        # Raw active: pi based on uncertainty only, uniform weights 
         pi_raw = estimate_pi(uncertainty, sample_budget, p=None, tau=tau_mix)
         xi_raw = sample_by_pi(pi_raw)
         p_raw = np.ones(n_2) / n_2
@@ -144,6 +150,8 @@ if __name__ == "__main__":
         var_small_only = np.var(Y_1, ddof=1) / n_1
         p_weighted_mu_y = np.sum(p * Y_2)
         p_weighted_bias = p_weighted_mu_y - mu_Y
+        p_s1_weighted_mu_y = np.sum(p_s1 * Y_2)
+        p_s1_weighted_bias = p_s1_weighted_mu_y - mu_Y
         unweighted_bias = np.mean(Y_2) - mu_Y
         return (
             mu_Y,
@@ -160,7 +168,12 @@ if __name__ == "__main__":
             var_calibrated_s1,
             var_small_only,
             p_weighted_bias,
+            p_s1_weighted_bias,
             unweighted_bias,
+            moment_error_norm,
+            p_max,
+            p_min,
+            mu_x_s1_diff_norm,
         )
 
     # print("mu_Y_raw =", np.mean(Y_2))
@@ -178,7 +191,12 @@ if __name__ == "__main__":
     lst_var_calibrated_s1 = []
     lst_var_small_only = []
     lst_p_weighted_bias = []
+    lst_p_s1_weighted_bias = []
     lst_unweighted_bias = []
+    lst_moment_error_norm = []
+    lst_p_max = []
+    lst_p_min = []
+    lst_mu_x_s1_diff_norm = []
     for i in tqdm(range(n_sim)):
         # Use different seed for each simulation to ensure reproducibility while allowing variation
         sim_seed = seed + i if seed is not None else None
@@ -197,7 +215,12 @@ if __name__ == "__main__":
             var_calibrated_s1,
             var_small_only,
             p_weighted_bias,
+            p_s1_weighted_bias,
             unweighted_bias,
+            moment_error_norm,
+            p_max,
+            p_min,
+            mu_x_s1_diff_norm,
         ) = simulate_one_time(sim_seed=sim_seed)
         lst_mu_Y.append(mu_Y)
         lst_activate_estimator_calibrated.append(activate_estimator)
@@ -213,7 +236,12 @@ if __name__ == "__main__":
         lst_var_calibrated_s1.append(var_calibrated_s1)
         lst_var_small_only.append(var_small_only)
         lst_p_weighted_bias.append(p_weighted_bias)
+        lst_p_s1_weighted_bias.append(p_s1_weighted_bias)
         lst_unweighted_bias.append(unweighted_bias)
+        lst_moment_error_norm.append(moment_error_norm)
+        lst_p_max.append(p_max)
+        lst_p_min.append(p_min)
+        lst_mu_x_s1_diff_norm.append(mu_x_s1_diff_norm)
     # bias
     lst_activate_estimator_calibrated = np.array(lst_activate_estimator_calibrated)
     lst_activate_estimator_raw = np.array(lst_activate_estimator_raw)
@@ -281,10 +309,25 @@ if __name__ == "__main__":
     console.print(table)
 
     p_weighted_bias = np.array(lst_p_weighted_bias)
+    p_s1_weighted_bias = np.array(lst_p_s1_weighted_bias)
     unweighted_bias = np.array(lst_unweighted_bias)
     print(
         f"\nEL加权 Y 均值偏差（均值 ± 标准差）: {p_weighted_bias.mean():.6f} ± {p_weighted_bias.std():.6f}"
     )
     print(
+        f"EL(S1均值)加权 Y 均值偏差（均值 ± 标准差）: {p_s1_weighted_bias.mean():.6f} ± {p_s1_weighted_bias.std():.6f}"
+    )
+    print(
         f"未加权 Y_2 均值偏差（均值 ± 标准差）: {unweighted_bias.mean():.6f} ± {unweighted_bias.std():.6f}"
+    )
+    moment_error_norm = np.array(lst_moment_error_norm)
+    p_max = np.array(lst_p_max)
+    p_min = np.array(lst_p_min)
+    print(
+        f"EL矩条件误差范数（均值 ± 标准差）: {moment_error_norm.mean():.6f} ± {moment_error_norm.std():.6f}"
+    )
+    print(f"EL权重范围（均值）: min={p_min.mean():.6e}, max={p_max.mean():.6e}")
+    mu_x_s1_diff_norm = np.array(lst_mu_x_s1_diff_norm)
+    print(
+        f"mu_X(S1) 与 mu_X 差异范数（均值 ± 标准差）: {mu_x_s1_diff_norm.mean():.6f} ± {mu_x_s1_diff_norm.std():.6f}"
     )
