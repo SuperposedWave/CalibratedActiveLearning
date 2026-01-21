@@ -12,8 +12,8 @@ from utils import (
 )
 
 
-def fit_models(X_1, Y_1, random_state=None, n_splits=5):
-    """Fit regression and uncertainty models using cross-fitted residuals."""
+def fit_models(X_1, Y_1, random_state=None, holdout_frac=0.3):
+    """Fit regression and uncertainty models using a train/holdout split."""
     model_reg = XGBRegressor(
         booster='gbtree',
         tree_method='hist',
@@ -38,7 +38,6 @@ def fit_models(X_1, Y_1, random_state=None, n_splits=5):
     )
 
     n = X_1.shape[0]
-    splits = max(2, min(n_splits, n))
     if n < 2:
         model_reg.fit(X_1, Y_1)
         res_abs = np.abs(Y_1 - model_reg.predict(X_1))
@@ -47,32 +46,17 @@ def fit_models(X_1, Y_1, random_state=None, n_splits=5):
 
     rng = np.random.default_rng(random_state)
     perm = rng.permutation(n)
-    fold_sizes = np.full(splits, n // splits, dtype=int)
-    fold_sizes[: n % splits] += 1
-    oof_resid = np.empty(n, dtype=float)
-    start = 0
-    for fold_size in fold_sizes:
-        stop = start + fold_size
-        val_idx = perm[start:stop]
-        train_idx = np.concatenate([perm[:start], perm[stop:]])
-        fold_reg = XGBRegressor(
-            booster='gbtree',
-            tree_method='hist',
-            n_jobs=128,
-            random_state=random_state,
-            n_estimators=200,
-            max_depth=4,
-            min_child_weight=5,
-            subsample=0.8,
-            colsample_bytree=0.8,
-        )
-        fold_reg.fit(X_1[train_idx], Y_1[train_idx])
-        y_val_pred = fold_reg.predict(X_1[val_idx])
-        oof_resid[val_idx] = np.abs(Y_1[val_idx] - y_val_pred)
-        start = stop
+    n_holdout = max(1, int(round(n * holdout_frac)))
+    holdout_idx = perm[:n_holdout]
+    train_idx = perm[n_holdout:]
+    if train_idx.size == 0:
+        train_idx = holdout_idx
+        holdout_idx = perm[n_holdout:]
 
-    model_reg.fit(X_1, Y_1)
-    model_unc.fit(X_1, oof_resid)
+    model_reg.fit(X_1[train_idx], Y_1[train_idx])
+    y_holdout_pred = model_reg.predict(X_1[holdout_idx])
+    res_abs = np.abs(Y_1[holdout_idx] - y_holdout_pred)
+    model_unc.fit(X_1[holdout_idx], res_abs)
     return model_reg, model_unc
 
 if __name__ == "__main__":
@@ -81,22 +65,23 @@ if __name__ == "__main__":
     seed_everything(seed)
     
     # generate data
-    N = 1000
+    N = 10000
     dim = 5
-    n_1 = 50
-    n_2 =  500
-    sample_budget = 200
+    n_1 = 30
+    n_2 =  5000
+    sample_budget = 5000
     n_sim = 100
-    is_linear = True
+    is_linear = False
     use_mu_x_from_s1 = False
-    tau_mix = 0.5
+    tau_mix = 0
+    holdout_frac = 0.5
     
 
     def simulate_one_time(sim_seed=None):
         mu_X, mu_Y, X_1, Y_1, Y_2, X_2 = generate_finite_population(
             N, dim, n_1, n_2, is_linear=is_linear, use_quadratic_features=not is_linear, seed=sim_seed
         )
-        model_reg, model_unc = fit_models(X_1, Y_1, random_state=sim_seed)
+        model_reg, model_unc = fit_models(X_1, Y_1, random_state=sim_seed, holdout_frac=holdout_frac)
         mu_X_s1 = np.mean(X_1, axis=0)
         # Use estimate_p from package
         p = estimate_p(X_2, mu_X)
@@ -113,6 +98,7 @@ if __name__ == "__main__":
         # Use estimate_pi and sample_by_pi from package
         pi_calibrated = estimate_pi(uncertainty, sample_budget, p, tau=tau_mix)
         xi_calibrated = sample_by_pi(pi_calibrated)
+        n_cal = int(xi_calibrated.sum())
 
         activate_estimator, var_calibrated = get_activate_estimator(
             y_pred, Y_2, pi_calibrated, xi_calibrated, p=p, estimate_variance=True
@@ -121,6 +107,7 @@ if __name__ == "__main__":
         # Raw active: pi based on uncertainty only, uniform weights 
         pi_raw = estimate_pi(uncertainty, sample_budget, p=None, tau=tau_mix)
         xi_raw = sample_by_pi(pi_raw)
+        n_raw = int(xi_raw.sum())
         p_raw = np.ones(n_2) / n_2
         activate_estimator_raw, var_raw = get_activate_estimator(
             y_pred, Y_2, pi_raw, xi_raw, p=p_raw, estimate_variance=True
@@ -129,6 +116,7 @@ if __name__ == "__main__":
         # Calibrated EL-only: pi based on EL weights only (no uncertainty)
         pi_el = estimate_pi(np.ones(n_2), sample_budget, p, tau=tau_mix)
         xi_el = sample_by_pi(pi_el)
+        n_el = int(xi_el.sum())
         activate_estimator_el, var_el = get_activate_estimator(
             y_pred, Y_2, pi_el, xi_el, p=p, estimate_variance=True
         )
@@ -136,6 +124,7 @@ if __name__ == "__main__":
         # Calibrated active with S1 mu_X
         pi_calibrated_s1 = estimate_pi(uncertainty, sample_budget, p_s1, tau=tau_mix)
         xi_calibrated_s1 = sample_by_pi(pi_calibrated_s1)
+        n_cal_s1 = int(xi_calibrated_s1.sum())
         activate_estimator_s1, var_calibrated_s1 = get_activate_estimator(
             y_pred, Y_2, pi_calibrated_s1, xi_calibrated_s1, p=p_s1, estimate_variance=True
         )
@@ -143,8 +132,9 @@ if __name__ == "__main__":
         # Calibrated random
         pi_rand = np.ones(n_2) * (sample_budget / n_2)
         xi_rand = sample_by_pi(pi_rand)
+        n_rand = int(xi_rand.sum())
         activate_estimator_cal_random, var_cal_random = get_activate_estimator(
-            y_pred, Y_2, pi_rand, xi_rand, p=p, estimate_variance=True
+            y_pred, Y_2, pi_rand, xi_rand, p=np.ones(n_2) / n_2, estimate_variance=True
         )
         small_only = np.mean(Y_1)
         var_small_only = np.var(Y_1, ddof=1) / n_1
@@ -174,6 +164,11 @@ if __name__ == "__main__":
             p_max,
             p_min,
             mu_x_s1_diff_norm,
+            n_cal,
+            n_raw,
+            n_el,
+            n_cal_s1,
+            n_rand,
         )
 
     # print("mu_Y_raw =", np.mean(Y_2))
@@ -197,6 +192,11 @@ if __name__ == "__main__":
     lst_p_max = []
     lst_p_min = []
     lst_mu_x_s1_diff_norm = []
+    lst_n_cal = []
+    lst_n_raw = []
+    lst_n_el = []
+    lst_n_cal_s1 = []
+    lst_n_rand = []
     for i in tqdm(range(n_sim)):
         # Use different seed for each simulation to ensure reproducibility while allowing variation
         sim_seed = seed + i if seed is not None else None
@@ -221,6 +221,11 @@ if __name__ == "__main__":
             p_max,
             p_min,
             mu_x_s1_diff_norm,
+            n_cal,
+            n_raw,
+            n_el,
+            n_cal_s1,
+            n_rand,
         ) = simulate_one_time(sim_seed=sim_seed)
         lst_mu_Y.append(mu_Y)
         lst_activate_estimator_calibrated.append(activate_estimator)
@@ -242,6 +247,11 @@ if __name__ == "__main__":
         lst_p_max.append(p_max)
         lst_p_min.append(p_min)
         lst_mu_x_s1_diff_norm.append(mu_x_s1_diff_norm)
+        lst_n_cal.append(n_cal)
+        lst_n_raw.append(n_raw)
+        lst_n_el.append(n_el)
+        lst_n_cal_s1.append(n_cal_s1)
+        lst_n_rand.append(n_rand)
     # bias
     lst_activate_estimator_calibrated = np.array(lst_activate_estimator_calibrated)
     lst_activate_estimator_raw = np.array(lst_activate_estimator_raw)
@@ -304,9 +314,22 @@ if __name__ == "__main__":
         coverage_small_only,
     ]
 
-    table = create_results_table(methods, biases, variances, mses, coverages)
+
+
+    var_estimates = [
+        lst_var_calibrated.mean(),
+        lst_var_calibrated_s1.mean(),
+        lst_var_raw.mean(),
+        lst_var_el.mean(),
+        lst_var_cal_random.mean(),
+        lst_var_small_only.mean(),
+    ]
+    table = create_results_table(methods, biases, variances, mses, coverages, var_estimates=var_estimates)
     console = Console()
     console.print(table)
+    # print("\n估计方差（均值）:")
+    # for method, var_est in zip(methods, var_estimates):
+    #     print(f"{method}: {var_est:.6f}")
 
     p_weighted_bias = np.array(lst_p_weighted_bias)
     p_s1_weighted_bias = np.array(lst_p_s1_weighted_bias)
@@ -331,3 +354,9 @@ if __name__ == "__main__":
     print(
         f"mu_X(S1) 与 mu_X 差异范数（均值 ± 标准差）: {mu_x_s1_diff_norm.mean():.6f} ± {mu_x_s1_diff_norm.std():.6f}"
     )
+    print("\n二阶段样本量（均值 ± 标准差）:")
+    print(f"Calibrated Active (mu_X true): {np.mean(lst_n_cal):.2f} ± {np.std(lst_n_cal):.2f}")
+    print(f"Calibrated Active (mu_X S1): {np.mean(lst_n_cal_s1):.2f} ± {np.std(lst_n_cal_s1):.2f}")
+    print(f"Raw Active: {np.mean(lst_n_raw):.2f} ± {np.std(lst_n_raw):.2f}")
+    print(f"Calibrated EL-only: {np.mean(lst_n_el):.2f} ± {np.std(lst_n_el):.2f}")
+    print(f"Calibrated Random: {np.mean(lst_n_rand):.2f} ± {np.std(lst_n_rand):.2f}")

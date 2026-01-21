@@ -29,7 +29,6 @@ def seed_everything(seed: int, use_torch: bool = True):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-
 def generate_finite_population(
     N: int,
     dim: int,
@@ -41,78 +40,50 @@ def generate_finite_population(
     use_quadratic_features: bool = False,
 ) -> Tuple:
     """
-    Generate finite population data with two samples.
-    
-    Args:
-        N: Population size
-        dim: Feature dimension
-        n_1: Size of sample S1 (small sample)
-        n_2: Size of sample S2 (large sample)
-        is_linear: Whether to use linear model (True) or nonlinear model (False)
-        seed: Random seed
-        return_dict: If True, return dictionary; otherwise return tuple
-        use_quadratic_features: If True, use quadratic features for nonlinear case (test.py style)
-    
-    Returns:
-        If return_dict=False: (mu_X, mu_Y, X_1, Y_1, Y_2, X_2)
-        If return_dict=True: dict with keys: X, Y, mu_X, mu_Y, X_1, Y_1, X_2, Y_2
+    5D single-index linear DGP where EL first-moment calibration
+    perfectly recovers the population mean.
+
+    - Y = beta^T X + eps
+    - S2 selection depends only on the same index beta^T X
     """
-    if seed is not None:
-        rng = np.random.default_rng(seed)
-    else:
-        rng = np.random.default_rng()
-    
+
+    assert dim == 5, "This sanity-check DGP is designed for dim=5."
+
+    rng = np.random.default_rng(seed)
+
+    # -----------------------------
+    # Population covariates
+    # -----------------------------
     X = rng.normal(size=(N, dim))
-    
-    if is_linear:
-        if seed is not None:
-            beta = rng.uniform(-5, 5, size=dim)
-        else:
-            beta = np.random.uniform(-5, 5, size=dim)
-        noise = rng.normal(size=N) if seed is not None else np.random.randn(N)
-        Y = X @ beta + noise
-        mu_X = np.mean(X, axis=0)
-    else:
-        # Custom nonlinear DGP.
-        if X.shape[1] < 5:
-            raise ValueError("dim must be >= 5 for the custom nonlinear DGP.")
-        # Homoskedastic noise.
-        sigma = 1.0
-        eps = rng.normal(scale=sigma, size=N) if seed is not None else np.random.randn(N) * sigma
-        m = (
-            10.0 * np.sin(np.pi * X[:, 0] * X[:, 1])
-            + 20.0 * (X[:, 2] - 0.5) ** 2
-            + 10.0 * X[:, 3]
-            + 5.0 * X[:, 4]
-        )
-        Y = m + eps
-        if use_quadratic_features:
-            X_base = X
-            prod = X_base[:, :, None] * X_base[:, None, :]
-            prod = prod.reshape(N, dim * dim)
-            X = np.concatenate([X_base, prod], axis=1)
-        mu_X = np.mean(X, axis=0)
-    
-    mu_Y = np.mean(Y)
-    
-    # Sample S1: simple random sampling
-    if seed is not None:
-        idx1 = rng.choice(N, size=n_1, replace=False)
-    else:
-        idx1 = np.random.choice(N, size=n_1, replace=False)
+
+    # Fixed beta for reproducibility / clarity
+    beta = np.array([2.0, -1.5, 1.0, 0.5, -0.5])
+
+    # Outcome
+    eps = rng.normal(scale=1.0, size=N)
+    Y = X @ beta + eps
+
+    mu_X = X.mean(axis=0)
+    mu_Y = Y.mean()
+
+    # -----------------------------
+    # S1: small unbiased sample
+    # -----------------------------
+    idx1 = rng.choice(N, size=n_1, replace=False)
     X_1, Y_1 = X[idx1], Y[idx1]
-    
-    # Sample S2: biased sampling based on X
-    score = 1.5 * X[:, 0] + 0.5 * X[:, 1]
-    # score = Y
-    prob = 1 / (1 + np.exp(-score))
+
+    # -----------------------------
+    # S2: biased sample (single-index)
+    # -----------------------------
+    kappa = 2.5  # controls bias strength (2~3 is usually enough)
+    u = X @ beta
+
+    prob = 1.0 / (1.0 + np.exp(-kappa * u))
     prob = prob / prob.sum()
-    if seed is not None:
-        idx2 = rng.choice(N, size=n_2, replace=False, p=prob)
-    else:
-        idx2 = np.random.choice(N, size=n_2, replace=False, p=prob)
+
+    idx2 = rng.choice(N, size=n_2, replace=False, p=prob)
     X_2, Y_2 = X[idx2], Y[idx2]
-    
+
     if return_dict:
         return {
             "X": X,
@@ -127,6 +98,189 @@ def generate_finite_population(
     else:
         return mu_X, mu_Y, X_1, Y_1, Y_2, X_2
 
+# def generate_finite_population(
+#     N: int,
+#     dim: int,
+#     n_1: int,
+#     n_2: int,
+#     is_linear: bool = True,
+#     seed: int = None,
+#     return_dict: bool = False,
+#     use_quadratic_features: bool = False,
+# ):
+#     rng = np.random.default_rng(seed)
+
+#     # ---------- Population ----------
+#     X = rng.normal(size=(N, 1))           # dim = 1
+#     beta = 2.0
+#     eps = rng.normal(scale=1.0, size=N)
+#     Y = beta * X[:, 0] + eps
+
+#     mu_X = X.mean(axis=0)
+#     mu_Y = Y.mean()
+
+#     # ---------- S1: small random sample ----------
+#     idx1 = rng.choice(N, size=n_1, replace=False)
+#     X_1, Y_1 = X[idx1], Y[idx1]
+
+#     # ---------- S2: biased sample (single index) ----------
+#     kappa = 2.5
+#     score = kappa * X[:, 0]
+#     prob = 1.0 / (1.0 + np.exp(-score))
+#     prob /= prob.sum()
+
+#     idx2 = rng.choice(N, size=n_2, replace=False, p=prob)
+#     X_2, Y_2 = X[idx2], Y[idx2]
+
+#     if return_dict:
+#         return dict(
+#             X=X, Y=Y, mu_X=mu_X, mu_Y=mu_Y,
+#             X_1=X_1, Y_1=Y_1, X_2=X_2, Y_2=Y_2
+#         )
+#     else:
+#         return mu_X, mu_Y, X_1, Y_1, Y_2, X_2
+
+
+# def generate_finite_population(
+#     N: int,
+#     dim: int,
+#     n_1: int,
+#     n_2: int,
+#     is_linear: bool = True,
+#     seed: Optional[int] = None,
+#     return_dict: bool = False,
+#     use_quadratic_features: bool = False,
+# ) -> Tuple:
+#     """
+#     Generate finite population data with two samples.
+
+#     Linear case (is_linear=True):
+#       - Outcome: Y = X @ beta + eps
+#       - S2 sampling: Scheme A (strongly biased), pi(X) aligned with beta^T X
+
+#     Nonlinear case (is_linear=False):
+#       - Outcome: Y = m(X) + eps
+#       - S2 sampling: Scheme B (strongly biased), pi(X) aligned with a nonlinear index u(X)
+#         that correlates strongly with m(X) but depends only on X (NOT Y).
+
+#     Args/Returns: unchanged from your original version.
+#     """
+#     rng = np.random.default_rng(seed) if seed is not None else np.random.default_rng()
+
+#     # Keep a raw copy for DGP + sampling score construction.
+#     X_raw = rng.normal(size=(N, dim))
+
+#     # -----------------------------
+#     # Outcome model
+#     # -----------------------------
+#     if is_linear:
+#         beta = rng.uniform(-5, 5, size=dim) if seed is not None else np.random.uniform(-5, 5, size=dim)
+#         eps = rng.normal(size=N) if seed is not None else np.random.randn(N)
+#         Y = X_raw @ beta + eps
+
+#         # Features used downstream (possibly expanded)
+#         X = X_raw
+#         if use_quadratic_features:
+#             X_base = X
+#             prod = X_base[:, :, None] * X_base[:, None, :]
+#             prod = prod.reshape(N, dim * dim)
+#             X = np.concatenate([X_base, prod], axis=1)
+
+#         mu_X = np.mean(X, axis=0)
+
+#     else:
+#         if X_raw.shape[1] < 5:
+#             raise ValueError("dim must be >= 5 for the custom nonlinear DGP.")
+#         sigma = 1.0
+#         eps = rng.normal(scale=sigma, size=N) if seed is not None else np.random.randn(N) * sigma
+
+#         # Nonlinear mean function m(X) based on raw features
+#         m = (
+#             10.0 * np.sin(np.pi * X_raw[:, 0] * X_raw[:, 1])
+#             + 20.0 * (X_raw[:, 2] - 0.5) ** 2
+#             + 10.0 * X_raw[:, 3]
+#             + 5.0 * X_raw[:, 4]
+#         )
+#         Y = m + eps
+
+#         # Features used downstream (possibly expanded)
+#         X = X_raw
+#         if use_quadratic_features:
+#             X_base = X
+#             prod = X_base[:, :, None] * X_base[:, None, :]
+#             prod = prod.reshape(N, dim * dim)
+#             X = np.concatenate([X_base, prod], axis=1)
+
+#         mu_X = np.mean(X, axis=0)
+
+#     mu_Y = np.mean(Y)
+
+#     # -----------------------------
+#     # Sample S1: simple random sampling (unbiased)
+#     # -----------------------------
+#     idx1 = rng.choice(N, size=n_1, replace=False) if seed is not None else np.random.choice(N, size=n_1, replace=False)
+#     X_1, Y_1 = X[idx1], Y[idx1]
+
+#     # -----------------------------
+#     # Sample S2: biased sampling based on X (NOT Y)
+#     # -----------------------------
+#     # We construct sampling scores using X_raw to keep the bias mechanism interpretable/stable
+#     # even if X is expanded later.
+#     if is_linear:
+#         # ===== Scheme A (Linear): align selection with outcome direction beta^T X =====
+#         # Controls how biased S2 is. Larger => more biased.
+#         kappa = 4.0
+
+#         # Align alpha with beta direction.
+#         beta_norm = np.linalg.norm(beta) + 1e-12
+#         alpha = beta / beta_norm
+#         u = X_raw @ alpha  # strong alignment with E[Y|X]
+
+#         # Use softmax-style weights for stronger, tunable bias than logistic.
+#         logw = kappa * u
+#         logw = logw - np.max(logw)  # stabilize
+#         w = np.exp(logw)
+#         prob = w / np.sum(w)
+
+#     else:
+#         # ===== Scheme B (Nonlinear): align selection with a nonlinear index u(X) =====
+#         # Controls how biased S2 is. Larger => more biased.
+#         kappa = 1.0
+
+#         # Build u(X) that correlates strongly with m(X) but depends only on X_raw.
+#         # Using components similar to m(X) makes selection bias strongly aligned with outcome.
+#         u = (
+#             1.0 * np.sin(np.pi * X_raw[:, 0] * X_raw[:, 1])
+#             + 2.0 * (X_raw[:, 2] - 0.5) ** 2
+#             + 1.0 * X_raw[:, 3]
+#             + 0.5 * X_raw[:, 4]
+#         )
+
+#         # Softmax-style weights
+#         # logw = kappa * u
+#         # logw = logw - np.max(logw)  # stabilize
+#         # w = np.exp(logw)
+#         # prob = w / np.sum(w)
+#         kappa = 1.0  # 从 1~3 扫
+#         prob = 1 / (1 + np.exp(-kappa * u))
+#         prob = prob / prob.sum()
+
+#     idx2 = rng.choice(N, size=n_2, replace=False, p=prob) if seed is not None else np.random.choice(N, size=n_2, replace=False, p=prob)
+#     X_2, Y_2 = X[idx2], Y[idx2]
+
+#     if return_dict:
+#         return {
+#             "X": X,
+#             "Y": Y,
+#             "mu_X": mu_X,
+#             "mu_Y": mu_Y,
+#             "X_1": X_1,
+#             "Y_1": Y_1,
+#             "X_2": X_2,
+#             "Y_2": Y_2,
+#         }
+#     else:
+#         return mu_X, mu_Y, X_1, Y_1, Y_2, X_2
 
 # def generate_finite_population(
 #     N: int,
@@ -268,6 +422,7 @@ def create_results_table(
     variances: list,
     mses: list,
     coverages: list,
+    var_estimates: list = None,
     title: str = "Active Estimator Comparison",
 ) -> Table:
     """
@@ -288,21 +443,26 @@ def create_results_table(
     table.add_column("Method", style="bold")
     table.add_column("Bias", justify="right")
     table.add_column("Variance", justify="right")
+    if var_estimates is not None:
+        table.add_column("Var Est", justify="right")
     table.add_column("MSE", justify="right")
     table.add_column("Coverage(90%)", justify="right")
     table.add_column("Coverage(95%)", justify="right")
     table.add_column("Coverage(99%)", justify="right")
     
-    for method, bias, var, mse, cov in zip(methods, biases, variances, mses, coverages):
-        table.add_row(
+    for idx, (method, bias, var, mse, cov) in enumerate(
+        zip(methods, biases, variances, mses, coverages)
+    ):
+        row = [
             method,
             f"{bias:.6f}",
             f"{var:.6f}",
-            f"{mse:.6f}",
-            f"{cov[0.90]:.3f}",
-            f"{cov[0.95]:.3f}",
-            f"{cov[0.99]:.3f}",
-        )
+        ]
+        if var_estimates is not None:
+            row.append(f"{var_estimates[idx]:.6f}")
+        row.append(f"{mse:.6f}")
+        row.extend([f"{cov[0.90]:.3f}", f"{cov[0.95]:.3f}", f"{cov[0.99]:.3f}"])
+        table.add_row(*row)
     
     return table
 
